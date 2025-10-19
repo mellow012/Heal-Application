@@ -1,6 +1,6 @@
 'use client';
 
-import { useAuth } from '@clerk/nextjs';
+import { useAuth } from '../components/AuthProvide';
 import { db } from '@/lib/firebase';
 import { 
   collection, 
@@ -59,17 +59,18 @@ const MALAWI_EMERGENCY_NUMBERS = [
 ];
 
 // Custom hooks
-const useEmergencyContacts = (userId, isLoaded) => {
+const useEmergencyContacts = (user, authLoading) => {
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    if (!isLoaded || !userId) {
+    if (authLoading || !user) {
       setLoading(false);
       return;
     }
 
+    const userId = user.uid;
     setLoading(true);
     setError(null);
 
@@ -105,7 +106,7 @@ const useEmergencyContacts = (userId, isLoaded) => {
     );
 
     return () => unsubscribe();
-  }, [userId, isLoaded]);
+  }, [user, authLoading]);
 
   return { contacts, loading, error };
 };
@@ -371,8 +372,8 @@ const ContactForm = ({ onSubmit, loading }) => {
 
 // Main component
 export default function EmergencyServices() {
-  const { userId, isLoaded } = useAuth();
-  const { contacts, loading: contactsLoading, error: contactsError } = useEmergencyContacts(userId, isLoaded);
+  const { user, loading: authLoading } = useAuth();
+  const { contacts, loading: contactsLoading, error: contactsError } = useEmergencyContacts(user, authLoading);
   const { providers, loading: providersLoading, error: providersError } = useHealthcareProviders();
   
   const [adding, setAdding] = useState(false);
@@ -380,14 +381,15 @@ export default function EmergencyServices() {
 
   // Memoized values
   const isLoading = useMemo(() => 
-    !isLoaded || contactsLoading || providersLoading, 
-    [isLoaded, contactsLoading, providersLoading]
+    authLoading || contactsLoading || providersLoading, 
+    [authLoading, contactsLoading, providersLoading]
   );
 
   // Handlers
   const handleAddContact = useCallback(async (contactData) => {
-    if (!userId) return;
+    if (!user) return;
     
+    const userId = user.uid;
     setAdding(true);
     setGeneralError(null);
     
@@ -404,11 +406,12 @@ export default function EmergencyServices() {
     } finally {
       setAdding(false);
     }
-  }, [userId]);
+  }, [user]);
 
   const handleDeleteContact = useCallback(async (contactId) => {
-    if (!userId || !contactId) return;
+    if (!user || !contactId) return;
     
+    const userId = user.uid;
     if (!confirm('Are you sure you want to delete this contact?')) return;
     
     try {
@@ -418,11 +421,11 @@ export default function EmergencyServices() {
       console.error('Error deleting contact:', error);
       setGeneralError(`Failed to delete contact: ${error.message}`);
     }
-  }, [userId]);
+  }, [user]);
 
   // Render conditions
   if (isLoading) return <LoadingSpinner />;
-  if (!userId) return <SignInPrompt />;
+  if (!user) return <SignInPrompt />;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">

@@ -1,10 +1,12 @@
 'use client';
-import { useAuth } from '@clerk/nextjs';
+
 import { db } from '@/lib/firebase';
 import { collection, addDoc, query, where, onSnapshot } from 'firebase/firestore';
 import { useEffect, useState } from 'react';
 import { Loader2, BarChart2, Send, AlertCircle } from 'lucide-react';
 import Link from 'next/link';
+import { useAuth } from '../components/AuthProvide';
+import { useRouter } from 'next/navigation';
 
 // Mock AI decision tree (simulates Infermedica)
 const diagnosticTree = {
@@ -78,7 +80,8 @@ const diagnosticTree = {
 };
 
 export default function AIDiagnostic() {
-  const { userId, isLoaded } = useAuth();
+  const { user, loading: authLoading } = useAuth();
+  const router = useRouter();
   const [diagnoses, setDiagnoses] = useState([]);
   const [currentNode, setCurrentNode] = useState('start');
   const [answers, setAnswers] = useState([]);
@@ -88,8 +91,12 @@ export default function AIDiagnostic() {
 
   // Fetch past diagnoses
   useEffect(() => {
-    if (!isLoaded || !userId) return;
+    if (authLoading || !user) {
+      setLoading(false);
+      return;
+    }
 
+    const userId = user.uid;
     const q = query(collection(db, `e-passports/${userId}/diagnoses`), where('userId', '==', userId));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
@@ -102,7 +109,7 @@ export default function AIDiagnostic() {
     });
 
     return () => unsubscribe();
-  }, [userId, isLoaded]);
+  }, [user, authLoading]);
 
   // Handle user input
   const handleSubmit = async (e) => {
@@ -124,8 +131,8 @@ export default function AIDiagnostic() {
 
       // Save to Firestore
       try {
-        await addDoc(collection(db, `e-passports/${userId}/diagnoses`), {
-          userId,
+        await addDoc(collection(db, `e-passports/${user.uid}/diagnoses`), {
+          userId: user.uid,
           symptoms: newAnswers,
           condition: diagnosis.condition,
           advice: diagnosis.advice,
@@ -146,13 +153,13 @@ export default function AIDiagnostic() {
     setResult(null);
   };
 
-  if (!isLoaded || loading) return (
+  if (authLoading || loading) return (
     <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
       <Loader2 className="h-12 w-12 animate-spin text-blue-600" />
     </div>
   );
 
-  if (!userId) return (
+  if (!user) return (
     <div className="min-h-screen bg-gradient-to-br from-red-50 to-pink-50 flex items-center justify-center">
       <div className="bg-white rounded-2xl p-8 shadow-lg text-center">
         <h1 className="text-2xl font-bold text-slate-800 mb-4">Please Sign In</h1>

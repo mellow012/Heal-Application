@@ -1,11 +1,12 @@
 'use client';
-import { useAuth, useUser } from '@clerk/nextjs';
+
+import { useAuth } from '../components/AuthProvide';
 import { db } from '@/lib/firebase';
 import { doc, getDoc, collection, query, where, onSnapshot } from 'firebase/firestore';
 import { useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import { Loader2, AlertCircle, Calendar, ArrowLeft, CalendarPlus, CheckCircle, XCircle } from 'lucide-react';
+import { Loader2, AlertCircle, Calendar,Clock,User, ArrowLeft, CalendarPlus, CheckCircle, XCircle, Users } from 'lucide-react';
 
 const LoadingSpinner = () => (
   <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
@@ -74,8 +75,7 @@ const AppointmentCard = ({ appt }) => {
 };
 
 export default function Appointments() {
-  const { userId, isLoaded: authLoaded } = useAuth();
-  const { user, isLoaded: userLoaded } = useUser();
+  const { user, loading: authLoading } = useAuth();
   const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -84,28 +84,20 @@ export default function Appointments() {
   const [activeTab, setActiveTab] = useState('overview');
 
   useEffect(() => {
+    if (authLoading || !user) return;
+
+    const userId = user.uid;
     const fetchData = async () => {
       try {
-        if (!authLoaded || !userLoaded) return;
-
-        if (!userId) {
-          console.log('Appointments: No user, redirecting to sign-in');
-          router.push('/sign-in');
-          return;
-        }
-
-        console.log('Appointments: Fetching user document for', userId);
         const userRef = doc(db, 'users', userId);
         const userSnap = await getDoc(userRef);
         if (!userSnap.exists()) {
-          console.log('Appointments: No user document, redirecting to profile-setup');
           router.push('/profile-setup');
           return;
         }
 
-        setRole(userSnap.data().role || 'none');
+        setRole(userSnap.data().role || 'patient');
 
-        console.log('Appointments: Fetching appointments for user', userId);
         const q = query(
           collection(db, 'appointments'),
           where('userId', '==', userId),
@@ -115,8 +107,8 @@ export default function Appointments() {
           const appointmentsData = snapshot.docs.map(doc => ({
             id: doc.id,
             ...doc.data(),
-            createdAt: doc.data().createdAt.toDate(),
-            updatedAt: doc.data().updatedAt.toDate()
+            createdAt: doc.data().createdAt?.toDate?.() || new Date(),
+            updatedAt: doc.data().updatedAt?.toDate?.() || new Date()
           }));
           setAppointments(appointmentsData);
         });
@@ -131,7 +123,7 @@ export default function Appointments() {
     };
 
     fetchData();
-  }, [userId, authLoaded, userLoaded, router]);
+  }, [user, authLoading, router]);
 
   const today = new Date().toISOString().split('T')[0];
   const upcomingAppointments = appointments.filter(
@@ -239,7 +231,7 @@ export default function Appointments() {
     </div>
   );
 
-  if (!authLoaded || !userLoaded || loading) return <LoadingSpinner />;
+  if (authLoading || loading) return <LoadingSpinner />;
   if (error) return <ErrorState error={error} />;
   if (!user) return <LoadingSpinner />;
 

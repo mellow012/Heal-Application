@@ -1,5 +1,6 @@
 'use client';
-import { useAuth, useUser } from '@clerk/nextjs';
+
+import { useAuth } from '../components/AuthProvide';
 import { db } from '@/lib/firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { useRouter } from 'next/navigation';
@@ -107,7 +108,7 @@ const UserInfoCard = ({ user, personalData, role, onEdit }) => {
               <div>
                 <p className="text-sm text-slate-500">Full Name</p>
                 <p className="font-medium text-slate-800">
-                  {user.firstName} {user.lastName}
+                  {user.displayName || 'Not specified'}
                 </p>
               </div>
             </div>
@@ -116,7 +117,7 @@ const UserInfoCard = ({ user, personalData, role, onEdit }) => {
               <div>
                 <p className="text-sm text-slate-500">Email Address</p>
                 <p className="font-medium text-slate-800">
-                  {user.emailAddresses[0]?.emailAddress || 'Not available'}
+                  {user.email || 'Not available'}
                 </p>
               </div>
             </div>
@@ -318,8 +319,7 @@ const serializeFirestoreData = (data) => {
 };
 
 export default function EHealthPassport() {
-  const { userId, isLoaded: authLoaded } = useAuth();
-  const { user, isLoaded: userLoaded } = useUser();
+  const { user, loading: authLoading } = useAuth();
   const router = useRouter();
   
   const [loading, setLoading] = useState(true);
@@ -334,31 +334,23 @@ export default function EHealthPassport() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        if (!authLoaded || !userLoaded) {
+        if (authLoading || !user) {
           return;
         }
 
-        if (!userId) {
-          console.log('EHealthPassport: No user, redirecting to sign-in');
-          router.push('/sign-in');
-          return;
-        }
+        const userId = user.uid;
 
-        console.log('EHealthPassport: Fetching user document for', userId);
         const userRef = doc(db, 'users', userId);
         const userSnap = await getDoc(userRef);
         
         if (!userSnap.exists()) {
-          console.log('EHealthPassport: No user document, redirecting to profile-setup');
           router.push('/profile-setup');
           return;
         }
 
         const userData = userSnap.data();
         setRole(userData.role || 'none');
-        console.log('EHealthPassport: User role', userData.role || 'none');
 
-        console.log('EHealthPassport: Fetching passport for user', userId);
         const passportRef = doc(db, 'e_health_passports', userId);
         const passportSnap = await getDoc(passportRef);
         
@@ -368,8 +360,6 @@ export default function EHealthPassport() {
           setMedicalData(serializeFirestoreData(data.medicalData || {}));
           setHospitalRecords(serializeFirestoreData(data.hospitalRecords || { visits: [] }));
           setHealthAnalytics(serializeFirestoreData(data.healthAnalytics || { heartRateTrends: [], weightTrends: [] }));
-        } else {
-          console.log('EHealthPassport: No passport found, using defaults');
         }
 
         setLoading(false);
@@ -381,11 +371,11 @@ export default function EHealthPassport() {
     };
 
     fetchData();
-  }, [userId, authLoaded, userLoaded, router]);
+  }, [user, authLoading, router]);
 
   const handleEditSave = async (formData) => {
-    if (!userId) throw new Error('User not authenticated');
-    console.log('EHealthPassport: Saving personal data for user', userId);
+    if (!user) throw new Error('User not authenticated');
+    const userId = user.uid;
     const passportRef = doc(db, 'e_health_passports', userId);
     const passportSnap = await getDoc(passportRef);
     const existingData = passportSnap.exists() ? passportSnap.data() : {};
@@ -401,10 +391,9 @@ export default function EHealthPassport() {
     }, { merge: true });
 
     setPersonalData(formData);
-    console.log('EHealthPassport: Personal data saved successfully');
   };
 
-  if (!authLoaded || !userLoaded || loading) {
+  if (authLoading || loading) {
     return <LoadingSpinner />;
   }
 

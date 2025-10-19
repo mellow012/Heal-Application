@@ -1,5 +1,7 @@
 // src/lib/firebase-admin.ts
-import admin from 'firebase-admin';
+import { initializeApp, cert } from 'firebase-admin/app';
+import { getAuth } from 'firebase-admin/auth';
+import { getFirestore } from 'firebase-admin/firestore';
 
 // Helper function to properly format the private key
 const formatPrivateKey = (key: string | undefined): string => {
@@ -41,6 +43,7 @@ if (!admin.apps.length) {
     throw error;
   }
 }
-
+const adminApp = initializeApp(adminConfig, 'admin');
+export const adminAuth = getAuth(adminApp);
 export const adminDb = admin.firestore();
 export default adminDb;

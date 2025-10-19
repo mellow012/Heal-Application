@@ -1,6 +1,10 @@
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { useAuth } from './components/AuthProvide';
+import { signOut } from 'firebase/auth';
+import { auth } from '@/lib/firebase';
 import { 
   Heart, 
   Shield, 
@@ -20,23 +24,14 @@ import {
   Globe,
   LogOut
 } from 'lucide-react';
-import { useState, useEffect } from 'react';
-import { 
-  useAuth, 
-  useUser, 
-  SignInButton, 
-  SignUpButton, 
-  UserButton,
-  SignOutButton 
-} from '@clerk/nextjs';
 
 // Animated counter component
-const AnimatedCounter = ({ target, suffix = '', duration = 1500 }: { target: number; suffix?: string; duration?: number }) => {
+const AnimatedCounter = ({ target, suffix = '', duration = 1500 }) => {
   const [count, setCount] = useState(0);
 
   useEffect(() => {
-    let startTime: number | null = null;
-    const animate = (currentTime: number) => {
+    let startTime = null;
+    const animate = (currentTime) => {
       if (startTime === null) startTime = currentTime;
       const progress = Math.min((currentTime - startTime) / duration, 1);
       
@@ -53,8 +48,8 @@ const AnimatedCounter = ({ target, suffix = '', duration = 1500 }: { target: num
   return <span>{count.toLocaleString()}{suffix}</span>;
 };
 
-// Feature card component - light and welcoming
-const FeatureCard = ({ icon: Icon, title, description, delay = 0 }: { icon: React.ComponentType<any>; title: string; description: string; delay?: number }) => (
+// Feature card component
+const FeatureCard = ({ icon: Icon, title, description, delay = 0 }) => (
   <div 
     className="group p-8 bg-white rounded-3xl shadow-sm hover:shadow-lg transform hover:-translate-y-1 transition-all duration-300 border border-blue-50 hover:border-blue-100"
     style={{ animationDelay: `${delay}ms` }}
@@ -67,8 +62,8 @@ const FeatureCard = ({ icon: Icon, title, description, delay = 0 }: { icon: Reac
   </div>
 );
 
-// Stats card component - clean and bright
-const StatsCard = ({ number, label, suffix = '', icon: Icon }: { number: number; label: string; suffix?: string; icon: React.ComponentType<any> }) => (
+// Stats card component
+const StatsCard = ({ number, label, suffix = '', icon: Icon }) => (
   <div className="text-center p-6 bg-white rounded-2xl shadow-sm border border-blue-50 hover:shadow-md transition-all duration-300">
     <div className="flex justify-center mb-4">
       <div className="p-3 bg-blue-50 rounded-xl">
@@ -86,8 +81,8 @@ const StatsCard = ({ number, label, suffix = '', icon: Icon }: { number: number;
 export default function Home() {
   const [isVisible, setIsVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
-  const { isSignedIn, isLoaded } = useAuth();
-  const { user } = useUser();
+  const { user, loading } = useAuth();
+  const router = useRouter();
 
   useEffect(() => {
     // Simulate loading
@@ -99,7 +94,7 @@ export default function Home() {
     return () => clearTimeout(timer);
   }, []);
 
-  if (isLoading || !isLoaded) {
+  if (isLoading || loading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-blue-50 to-indigo-50">
         <div className="text-center">
@@ -152,32 +147,29 @@ export default function Home() {
     { number: 99, label: "Reliability", suffix: "%", icon: Shield },
   ];
 
+  const handleSignOut = async () => {
+    try {
+      await signOut(auth);
+      router.push('/login');
+    } catch (error) {
+      console.error('Error signing out:', error);
+    }
+  };
+
+  const handleSignIn = () => {
+    router.push('/login');
+  };
+
+  const handleSignUp = () => {
+    router.push('/register');
+  };
+
+  const dashboardPath = user?.customClaims?.role === 'hospital_admin' 
+    ? '/hospital-admin/dashboard' 
+    : '/dashboard';
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 via-white to-indigo-50">
-      {/* Top Navigation Bar for Signed In Users */}
-      {isSignedIn && (
-        <div className="bg-white border-b border-blue-100 px-4 py-3">
-          <div className="container mx-auto flex justify-between items-center">
-            <div className="flex items-center gap-2">
-              <Heart className="h-6 w-6 text-red-500" />
-              <span className="font-semibold text-slate-800">HealHealth</span>
-            </div>
-            <div className="flex items-center gap-4">
-              <span className="text-sm text-slate-600">
-                Welcome back, {user?.firstName || 'User'}!
-              </span>
-              <UserButton 
-                appearance={{
-                  elements: {
-                    avatarBox: "w-8 h-8"
-                  }
-                }}
-              />
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Hero Section */}
       <div className="relative overflow-hidden bg-gradient-to-br from-blue-50 to-indigo-100">
         {/* Subtle background pattern */}
@@ -206,7 +198,7 @@ export default function Home() {
             {/* Main Headline */}
             <div className={`transform transition-all duration-1000 delay-300 ${isVisible ? 'translate-y-0 opacity-100' : 'translate-y-10 opacity-0'}`}>
               <h2 className="text-4xl lg:text-6xl font-bold text-slate-800 mb-6 leading-tight">
-                {isSignedIn ? (
+                {user ? (
                   <>
                     Welcome Back to
                     <br />
@@ -227,9 +219,9 @@ export default function Home() {
             </div>
 
             {/* Subtitle */}
-            <div className={`transform transition-all duration-1000 delay-500 ${isVisible ? 'translate-y-0 opacity-100' : 'translate-y-10 opacity-0'}`}>
+            <div className={`transform transition-all duration-1000 delay-500 ${isVisible ? 'translate-y-0 opacity-0' : 'translate-y-10 opacity-0'}`}>
               <p className="text-xl lg:text-2xl text-slate-600 mb-12 max-w-4xl mx-auto leading-relaxed">
-                {isSignedIn ? (
+                {user ? (
                   <>
                     Continue managing your health journey with ease. Access your records, 
                     schedule appointments, and stay on top of your wellness goals.
@@ -245,35 +237,39 @@ export default function Home() {
 
             {/* CTA Buttons */}
             <div className={`flex flex-col sm:flex-row gap-4 justify-center items-center mb-16 transform transition-all duration-1000 delay-700 ${isVisible ? 'translate-y-0 opacity-100' : 'translate-y-10 opacity-0'}`}>
-              {isSignedIn ? (
+              {user ? (
                 <>
-                  <button className="group bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-2xl font-semibold text-lg transition-all duration-300 shadow-lg hover:shadow-xl transform hover:-translate-y-1 flex items-center gap-3 min-w-[200px] justify-center">
+                  <button 
+                    onClick={() => router.push(dashboardPath)}
+                    className="group bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-2xl font-semibold text-lg transition-all duration-300 shadow-lg hover:shadow-xl transform hover:-translate-y-1 flex items-center gap-3 min-w-[200px] justify-center"
+                  >
                     Go to Dashboard
                     <ArrowRight className="h-5 w-5 group-hover:translate-x-1 transition-transform duration-300" />
                   </button>
-                  
-                  <SignOutButton>
-                    <button className="group bg-white border-2 border-red-200 text-red-600 hover:border-red-300 hover:bg-red-50 px-8 py-4 rounded-2xl font-semibold text-lg transition-all duration-300 shadow-lg hover:shadow-xl transform hover:-translate-y-1 flex items-center gap-3 min-w-[200px] justify-center">
-                      Sign Out
-                      <LogOut className="h-5 w-5" />
-                    </button>
-                  </SignOutButton>
+                  <button 
+                    onClick={handleSignOut}
+                    className="group bg-white border-2 border-red-200 text-red-600 hover:border-red-300 hover:bg-red-50 px-8 py-4 rounded-2xl font-semibold text-lg transition-all duration-300 shadow-lg hover:shadow-xl transform hover:-translate-y-1 flex items-center gap-3 min-w-[200px] justify-center"
+                  >
+                    Sign Out
+                    <LogOut className="h-5 w-5" />
+                  </button>
                 </>
               ) : (
                 <>
-                  <SignUpButton mode="modal">
-                    <button className="group bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-2xl font-semibold text-lg transition-all duration-300 shadow-lg hover:shadow-xl transform hover:-translate-y-1 flex items-center gap-3 min-w-[200px] justify-center">
-                      Get Started Free
-                      <ArrowRight className="h-5 w-5 group-hover:translate-x-1 transition-transform duration-300" />
-                    </button>
-                  </SignUpButton>
-                  
-                  <SignInButton mode="modal">
-                    <button className="group bg-white border-2 border-blue-200 text-blue-600 hover:border-blue-300 hover:bg-blue-50 px-8 py-4 rounded-2xl font-semibold text-lg transition-all duration-300 shadow-lg hover:shadow-xl transform hover:-translate-y-1 flex items-center gap-3 min-w-[200px] justify-center">
-                      Sign In
-                      <div className="w-2 h-2 bg-blue-600 rounded-full group-hover:scale-125 transition-transform duration-300" />
-                    </button>
-                  </SignInButton>
+                  <button 
+                    onClick={handleSignUp}
+                    className="group bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-2xl font-semibold text-lg transition-all duration-300 shadow-lg hover:shadow-xl transform hover:-translate-y-1 flex items-center gap-3 min-w-[200px] justify-center"
+                  >
+                    Get Started Free
+                    <ArrowRight className="h-5 w-5 group-hover:translate-x-1 transition-transform duration-300" />
+                  </button>
+                  <button 
+                    onClick={handleSignIn}
+                    className="group bg-white border-2 border-blue-200 text-blue-600 hover:border-blue-300 hover:bg-blue-50 px-8 py-4 rounded-2xl font-semibold text-lg transition-all duration-300 shadow-lg hover:shadow-xl transform hover:-translate-y-1 flex items-center gap-3 min-w-[200px] justify-center"
+                  >
+                    Sign In
+                    <div className="w-2 h-2 bg-blue-600 rounded-full group-hover:scale-125 transition-transform duration-300" />
+                  </button>
                 </>
               )}
             </div>
@@ -364,7 +360,7 @@ export default function Home() {
       </div>
 
       {/* Final CTA Section */}
-      {!isSignedIn && (
+      {!user && (
         <div className="py-20 bg-gradient-to-br from-blue-600 to-indigo-700 relative overflow-hidden">
           {/* Subtle background elements */}
           <div className="absolute inset-0 opacity-10">
@@ -391,12 +387,13 @@ export default function Home() {
               </p>
               
               <div className="flex flex-col sm:flex-row gap-4 justify-center mb-8">
-                <SignUpButton mode="modal">
-                  <button className="group bg-white text-blue-600 px-10 py-5 rounded-2xl font-semibold text-xl hover:bg-blue-50 transition-all duration-300 shadow-2xl hover:shadow-white/25 transform hover:-translate-y-1 flex items-center gap-3 justify-center min-w-[250px]">
-                    Start Your Free Trial
-                    <Heart className="h-6 w-6 group-hover:scale-110 transition-transform duration-300 text-red-500" />
-                  </button>
-                </SignUpButton>
+                <button 
+                  onClick={handleSignUp}
+                  className="group bg-white text-blue-600 px-10 py-5 rounded-2xl font-semibold text-xl hover:bg-blue-50 transition-all duration-300 shadow-2xl hover:shadow-white/25 transform hover:-translate-y-1 flex items-center gap-3 justify-center min-w-[250px]"
+                >
+                  Start Your Free Trial
+                  <Heart className="h-6 w-6 group-hover:scale-110 transition-transform duration-300 text-red-500" />
+                </button>
               </div>
 
               <div className="flex flex-wrap justify-center gap-6 text-blue-200 text-sm">

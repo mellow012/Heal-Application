@@ -1,118 +1,122 @@
-import { useState } from 'react'
-import { useOrganization, useUser } from '@clerk/nextjs'
-import { doc, getDoc, addDoc, collection, query, where, getDocs } from 'firebase/firestore'
-import { db } from '@/lib/firebase'
+'use client';
 
-
-
+import { useState, useEffect } from 'react';
+import { useAuth } from '../app/components/AuthProvide';
+import { doc, getDoc, addDoc, collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 
 export function usePatientAccess() {
-  const { organization, membership } = useOrganization()
-  const { user } = useUser()
-  const [patientRequests, setPatientRequests] = useState([])
-  const [authorizedPatients, setAuthorizedPatients] = useState([])
+  const { user, loading: authLoading } = useAuth();
+  const [patientRequests, setPatientRequests] = useState([]);
+  const [authorizedPatients, setAuthorizedPatients] = useState([]);
 
   const requestPatientAccess = async (patientId, permissions = ['read'], reason = '') => {
-    if (!organization) throw new Error('Must be part of an organization')
+    if (!user || !user.customClaims?.hospitalId) {
+      throw new Error('Must be part of a hospital');
+    }
 
     const request = {
       patientId,
-      hospitalId: organization.id,
-      hospitalName: organization.name,
-      requestedBy: user.id,
-      requestedByName: user.fullName,
-      requestedByRole: membership.role,
+      hospitalId: user.customClaims.hospitalId,
+      hospitalName: user.customClaims.hospitalName || 'Unknown Hospital',
+      requestedBy: user.uid,
+      requestedByName: user.email.split('@')[0],
+      requestedByRole: user.customClaims.role,
       permissions,
       reason,
       status: 'pending',
-      requestedAt: new Date()
-    }
+      requestedAt: new Date().toISOString(),
+    };
 
-    // Store in global access requests collection
-    await addDoc(collection(db, 'accessRequests'), request)
-    
-    // Also store in hospital's local requests
-    await addDoc(collection(db, 'organizations', organization.id, 'patientRequests'), request)
+    await addDoc(collection(db, 'accessRequests'), request);
+    await addDoc(collection(db, 'hospitals', user.customClaims.hospitalId, 'patientRequests'), request);
 
-    return request
-  }
+    return request;
+  };
 
   const accessPatientData = async (patientId, action = 'read') => {
-    if (!organization) throw new Error('Must be part of an organization')
-
-    // Check if hospital has permission
-    const accessDoc = await getDoc(
-      doc(db, 'organizations', organization.id, 'patientAccess', patientId)
-    )
-
-    if (!accessDoc.exists()) {
-      throw new Error('No permission to access this patient data')
+    if (!user || !user.customClaims?.hospitalId) {
+      throw new Error('Must be part of a hospital');
     }
 
-    const access = accessDoc.data()
-    if (!access.permissions.includes(action)) {
-      throw new Error(`No permission for ${action} access`)
+    const consentDoc = await getDoc(
+      doc(db, 'consents', `${patientId}_${user.customClaims.hospitalId}`)
+    );
+
+    if (!consentDoc.exists()) {
+      throw new Error('No permission to access this patient data');
     }
 
-    // Log the access
-    await addDoc(collection(db, 'dataAccess', patientId, 'accessLog'), {
-      hospitalId: organization.id,
-      hospitalName: organization.name,
-      staffId: user.id,
-      staffName: user.fullName,
-      staffRole: membership.role,
+    const consent = consentDoc.data();
+    if (!consent.permissions.includes(action)) {
+      throw new Error(`No permission for ${action} access`);
+    }
+
+    await addDoc(collection(db, 'patientData', patientId, 'accessLog'), {
+      hospitalId: user.customClaims.hospitalId,
+      hospitalName: user.customClaims.hospitalName || 'Unknown Hospital',
+      staffId: user.uid,
+      staffName: user.email.split('@')[0],
+      staffRole: user.customClaims.role,
       action,
-      timestamp: new Date(),
-      ipAddress: '', // You can capture this client-side
-      userAgent: navigator.userAgent
-    })
+      timestamp: new Date().toISOString(),
+      ipAddress: '',
+      userAgent: navigator.userAgent,
+    });
 
-    // Return patient data (simplified - you'd fetch actual medical records)
-    const patientDoc = await getDoc(doc(db, 'users', patientId))
-    return patientDoc.exists() ? patientDoc.data() : null
-  }
+    const patientDoc = await getDoc(doc(db, 'users', patientId));
+    return patientDoc.exists() ? patientDoc.data() : null;
+  };
 
   const fetchAuthorizedPatients = async () => {
-    if (!organization) return
+    if (!user || !user.customClaims?.hospitalId) return;
 
     try {
       const q = query(
-        collection(db, 'organizations', organization.id, 'patientAccess'),
+        collection(db, 'consents'),
+        where('hospitalId', '==', user.customClaims.hospitalId),
         where('permissions', 'array-contains-any', ['read', 'write'])
-      )
-      
-      const snapshot = await getDocs(q)
+      );
+
+      const snapshot = await getDocs(q);
       const patients = snapshot.docs.map(doc => ({
         id: doc.id,
-        ...doc.data()
-      }))
-      
-      setAuthorizedPatients(patients)
+        ...doc.data(),
+      }));
+
+      setAuthorizedPatients(patients);
     } catch (error) {
-      console.error('Error fetching authorized patients:', error)
+      console.error('Error fetching authorized patients:', error);
     }
-  }
+  };
 
   const fetchPendingRequests = async () => {
-    if (!organization) return
+    if (!user || !user.customClaims?.hospitalId) return;
 
     try {
       const q = query(
-        collection(db, 'organizations', organization.id, 'patientRequests'),
+        collection(db, 'hospitals', user.customClaims.hospitalId, 'patientRequests'),
         where('status', '==', 'pending')
-      )
-      
-      const snapshot = await getDocs(q)
+      );
+
+      const snapshot = await getDocs(q);
       const requests = snapshot.docs.map(doc => ({
         id: doc.id,
-        ...doc.data()
-      }))
-      
-      setPatientRequests(requests)
+        ...doc.data(),
+      }));
+
+      setPatientRequests(requests);
     } catch (error) {
-      console.error('Error fetching patient requests:', error)
+      console.error('Error fetching patient requests:', error);
     }
-  }
+  };
+
+  useEffect(() => {
+    if (!authLoading && user && user.customClaims?.hospitalId) {
+      fetchAuthorizedPatients();
+      fetchPendingRequests();
+    }
+  }, [user, authLoading]);
 
   return {
     patientRequests,
@@ -120,6 +124,6 @@ export function usePatientAccess() {
     requestPatientAccess,
     accessPatientData,
     fetchAuthorizedPatients,
-    fetchPendingRequests
-  }
+    fetchPendingRequests,
+  };
 }

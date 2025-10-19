@@ -1,17 +1,63 @@
 'use client';
-import { useAuth, useUser } from '@clerk/nextjs';
 import { db } from '@/lib/firebase';
 import { doc, getDoc, setDoc, collection, getDocs, addDoc } from 'firebase/firestore';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { Loader2, AlertCircle, ArrowLeft, Search, Calendar } from 'lucide-react';
+import { useAuth } from '@/app/components/AuthProvide';
 
-const LoadingSpinner = () => (
-  <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
-    <div className="text-center">
-      <Loader2 className="h-12 w-12 animate-spin text-blue-600 mx-auto mb-4" />
-      <p className="text-slate-600 text-lg">Loading booking form...</p>
+const SkeletonLoader = () => (
+  <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
+    <div className="container mx-auto px-4 py-8 max-w-7xl">
+      {/* Back link skeleton */}
+      <div className="mb-4">
+        <div className="h-4 w-32 bg-slate-200 rounded animate-pulse" />
+      </div>
+      {/* Header skeleton */}
+      <div className="flex items-center gap-4 mb-6">
+        <div className="p-3 bg-blue-100 rounded-2xl">
+          <div className="h-8 w-8 bg-slate-200 rounded animate-pulse" />
+        </div>
+        <div className="h-8 w-64 bg-slate-200 rounded animate-pulse" />
+      </div>
+      {/* Form skeleton */}
+      <div className="bg-white rounded-2xl shadow-lg p-6 space-y-6">
+        {/* Need dropdown */}
+        <div>
+          <div className="h-4 w-24 bg-slate-200 rounded mb-1 animate-pulse" />
+          <div className="h-10 w-full bg-slate-200 rounded-lg animate-pulse" />
+        </div>
+        {/* Problem textarea */}
+        <div>
+          <div className="h-4 w-32 bg-slate-200 rounded mb-1 animate-pulse" />
+          <div className="h-24 w-full bg-slate-200 rounded-lg animate-pulse" />
+        </div>
+        {/* Urgency buttons */}
+        <div>
+          <div className="h-4 w-24 bg-slate-200 rounded mb-1 animate-pulse" />
+          <div className="grid grid-cols-3 gap-3">
+            <div className="h-10 w-full bg-slate-200 rounded-lg animate-pulse" />
+            <div className="h-10 w-full bg-slate-200 rounded-lg animate-pulse" />
+            <div className="h-10 w-full bg-slate-200 rounded-lg animate-pulse" />
+          </div>
+        </div>
+        {/* Preferred time dropdown */}
+        <div>
+          <div className="h-4 w-24 bg-slate-200 rounded mb-1 animate-pulse" />
+          <div className="h-10 w-full bg-slate-200 rounded-lg animate-pulse" />
+        </div>
+        {/* Hospital dropdown */}
+        <div>
+          <div className="h-4 w-24 bg-slate-200 rounded mb-1 animate-pulse" />
+          <div className="h-10 w-full bg-slate-200 rounded-lg animate-pulse" />
+        </div>
+        {/* Submit/Cancel buttons */}
+        <div className="flex gap-4">
+          <div className="h-12 flex-1 bg-slate-200 rounded-lg animate-pulse" />
+          <div className="h-12 flex-1 bg-slate-200 rounded-lg animate-pulse" />
+        </div>
+      </div>
     </div>
   </div>
 );
@@ -37,13 +83,13 @@ const ErrorState = ({ error }) => (
 );
 
 export default function BookAppointment() {
-  const { userId, isLoaded: authLoaded } = useAuth();
-  const { user, isLoaded: userLoaded } = useUser();
+  const { user, loading: authLoading } = useAuth();
   const router = useRouter();
   const searchParams = useSearchParams();
   const editApptId = searchParams.get('edit');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [userData, setUserData] = useState(null);
   const [role, setRole] = useState(null);
   const [doctors, setDoctors] = useState([]);
   const [hospitals, setHospitals] = useState([]);
@@ -87,16 +133,16 @@ export default function BookAppointment() {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        if (!authLoaded || !userLoaded) return;
+        if (authLoading) return;
 
-        if (!userId) {
+        if (!user) {
           console.log('BookAppointment: No user, redirecting to sign-in');
           router.push('/sign-in');
           return;
         }
 
-        console.log('BookAppointment: Fetching user document for', userId);
-        const userRef = doc(db, 'users', userId);
+        console.log('BookAppointment: Fetching user document for', user.uid);
+        const userRef = doc(db, 'users', user.uid);
         const userSnap = await getDoc(userRef);
         if (!userSnap.exists()) {
           console.log('BookAppointment: No user document, redirecting to profile-setup');
@@ -104,6 +150,7 @@ export default function BookAppointment() {
           return;
         }
 
+        setUserData(userSnap.data());
         setRole(userSnap.data().role || 'none');
 
         console.log('BookAppointment: Fetching providers');
@@ -137,7 +184,7 @@ export default function BookAppointment() {
     };
 
     fetchData();
-  }, [userId, authLoaded, userLoaded, router, editApptId]);
+  }, [user, authLoading, router, editApptId]);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -174,14 +221,14 @@ export default function BookAppointment() {
     }
 
     try {
-      console.log('BookAppointment: Saving appointment for user', userId);
+      console.log('BookAppointment: Saving appointment for user', user.uid);
       const doctor = doctors.find(d => d.id === formData.doctorId);
       const hospital = hospitals.find(h => h.id === formData.hospitalId);
 
       const appointmentData = {
-        userId,
-        userEmail: user.emailAddresses[0].emailAddress,
-        userName: user.fullName || `${user.firstName} ${user.lastName}`,
+        userId: user.uid,
+        userEmail: user.email,
+        userName: userData?.fullName || user.displayName || 'Unknown',
         doctorId: formData.doctorId,
         doctorName: doctor?.name || 'Unknown',
         hospitalId: formData.hospitalId,
@@ -205,7 +252,6 @@ export default function BookAppointment() {
         apptId = docRef.id;
       }
 
-      // Update doctor's availableSlots
       const doctorRef = doc(db, 'healthcare_providers', formData.doctorId);
       const doctorSnap = await getDoc(doctorRef);
       if (doctorSnap.exists()) {
@@ -226,9 +272,9 @@ export default function BookAppointment() {
     }
   };
 
-  if (!authLoaded || !userLoaded || loading) return <LoadingSpinner />;
+  if (loading || authLoading) return <SkeletonLoader />;
   if (error) return <ErrorState error={error} />;
-  if (!user) return <LoadingSpinner />;
+  if (!user) return <SkeletonLoader />;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">

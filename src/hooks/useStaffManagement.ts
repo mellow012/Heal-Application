@@ -1,108 +1,152 @@
-import { useState, useEffect } from 'react'
-import { useOrganization } from '@clerk/nextjs' 
-import { doc, getDoc, setDoc, updateDoc, collection, addDoc } from 'firebase/firestore'
-import { db } from '@/lib/firebase'
+'use client';
 
-
+import { useState, useEffect } from 'react';
+import { useAuth } from '../app/components/AuthProvide';
+import { doc, getDocs, setDoc, updateDoc, collection, addDoc, query, where } from 'firebase/firestore';
+import { db } from '@/lib/firebase';
 
 export function useStaffManagement() {
-  const { organization, membership } = useOrganization()
-  const [staff, setStaff] = useState([])
-  const [invitations, setInvitations] = useState([])
+  const { user, loading: authLoading } = useAuth();
+  const [staff, setStaff] = useState([]);
+  const [invitations, setInvitations] = useState([]);
 
   const customRoles = [
-    'admin',
-    'doctor', 
+    'doctor',
     'nurse',
     'receptionist',
     'lab_technician',
     'pharmacist',
-    'radiologist'
-  ]
+    'radiologist',
+  ];
 
   const inviteStaffMember = async (email, role, metadata = {}) => {
-    if (!organization || membership?.role !== 'admin') {
-      throw new Error('Only admins can invite staff')
+    if (!user || user.customClaims?.role !== 'hospital_admin') {
+      throw new Error('Only hospital admins can invite staff');
     }
 
     try {
-      // Create invitation in Clerk
-      const invitation = await organization.inviteMember({
-        emailAddress: email,
-        role: role
-      })
+      const response = await fetch('/api/invite-staff', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          role,
+          hospitalId: user.uid,
+          hospitalName: user.customClaims?.hospitalName || 'Unknown Hospital',
+          metadata,
+        }),
+      });
 
-      // Store additional metadata in Firestore
-      await addDoc(collection(db, 'organizations', organization.id, 'staff_invitations'), {
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.error);
+      }
+
+      await addDoc(collection(db, 'hospitals', user.uid, 'staff_invitations'), {
         email,
         role,
         metadata,
-        invitedBy: membership.userId,
-        invitedAt: new Date(),
+        invitedBy: user.uid,
+        invitedAt: new Date().toISOString(),
         status: 'pending',
-        clerkInvitationId: invitation.id
-      })
+        invitationId: result.invitationId,
+      });
 
-      return invitation
+      return result;
     } catch (error) {
-      console.error('Error inviting staff member:', error)
-      throw error
+      console.error('Error inviting staff member:', error);
+      throw error;
     }
-  }
+  };
 
   const updateStaffRole = async (userId, newRole) => {
-    if (!organization || membership?.role !== 'admin') {
-      throw new Error('Only admins can update staff roles')
+    if (!user || user.customClaims?.role !== 'hospital_admin') {
+      throw new Error('Only hospital admins can update staff roles');
     }
 
     try {
-      await organization.updateMember({
-        userId,
-        role: newRole
-      })
+      await fetch('/api/update-staff-role', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, role: newRole }),
+      });
 
-      // Update in Firestore as well
-      await updateDoc(doc(db, 'organizations', organization.id, 'staff', userId), {
+      await updateDoc(doc(db, 'users', userId), {
         role: newRole,
-        updatedAt: new Date(),
-        updatedBy: membership.userId
-      })
+        updatedAt: new Date().toISOString(),
+        updatedBy: user.uid,
+      });
     } catch (error) {
-      console.error('Error updating staff role:', error)
-      throw error
+      console.error('Error updating staff role:', error);
+      throw error;
     }
-  }
+  };
 
   const removeStaffMember = async (userId) => {
-    if (!organization || membership?.role !== 'admin') {
-      throw new Error('Only admins can remove staff')
+    if (!user || user.customClaims?.role !== 'hospital_admin') {
+      throw new Error('Only hospital admins can remove staff');
     }
 
     try {
-      await organization.removeMember({ userId })
-      
-      // Archive in Firestore instead of deleting
-      await updateDoc(doc(db, 'organizations', organization.id, 'staff', userId), {
+      await updateDoc(doc(db, 'users', userId), {
         status: 'removed',
-        removedAt: new Date(),
-        removedBy: membership.userId
-      })
+        removedAt: new Date().toISOString(),
+        removedBy: user.uid,
+      });
     } catch (error) {
-      console.error('Error removing staff member:', error)
-      throw error
+      console.error('Error removing staff member:', error);
+      throw error;
     }
-  }
+  };
 
   const fetchStaffList = async () => {
-    if (!organization) return
+    if (!user || !user.customClaims?.hospitalId) return;
 
     try {
-      const members = await organization.getMembershipList()
-      setStaff(members)
+      const q = query(
+        collection(db, 'users'),
+        where('hospitalId', '==', user.customClaims.hospitalId),
+        where('role', 'in', customRoles),
+        where('status', '!=', 'removed')
+      );
+
+      const snapshot = await getDocs(q);
+      const staffList = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+      setStaff(staffList);
     } catch (error) {
-      console.error('Error fetching staff:', error)
+      console.error('Error fetching staff:', error);
     }
-  }
+  };
+
+  const fetchInvitations = async () => {
+    if (!user || !user.customClaims?.hospitalId) return;
+
+    try {
+      const q = query(
+        collection(db, 'hospitals', user.customClaims.hospitalId, 'staff_invitations'),
+        where('status', '==', 'pending')
+      );
+
+      const snapshot = await getDocs(q);
+      const invitationList = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+      setInvitations(invitationList);
+    } catch (error) {
+      console.error('Error fetching invitations:', error);
+    }
+  };
+
+  useEffect(() => {
+    if (!authLoading && user && user.customClaims?.hospitalId) {
+      fetchStaffList();
+      fetchInvitations();
+    }
+  }, [user, authLoading]);
 
   return {
     staff,
@@ -112,6 +156,6 @@ export function useStaffManagement() {
     updateStaffRole,
     removeStaffMember,
     fetchStaffList,
-    isAdmin: membership?.role === 'admin'
-  }
+    isAdmin: user?.customClaims?.role === 'hospital_admin',
+  };
 }

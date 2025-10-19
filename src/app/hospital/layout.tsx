@@ -1,38 +1,94 @@
 'use client';
-import { useUser, useOrganization } from '@clerk/nextjs'
-import { useHospital } from '../../hooks/useHospital'
-import { useStaffManagement } from '../../hooks/useStaffManagement'
-import { usePatientAccess } from '../../hooks/usePatientAccess'
-import { useEffect, useState } from 'react'
-import Link from 'next/link'
+import { useEffect, useState } from 'react';
+import Link from 'next/link';
+import { useRouter } from 'next/navigation';
+import { useAuth } from '../components/AuthProvide';
+import { db } from '@/lib/firebase';
+import { collection, query, where, getDocs, doc, getDoc } from 'firebase/firestore';
 
 export default function DashboardPage() {
-  const { user } = useUser()
-  const { organization, membership } = useOrganization()
-  const { hospitalData, loading } = useHospital()
-  const { staff, fetchStaffList } = useStaffManagement()
-  const { authorizedPatients, fetchAuthorizedPatients } = usePatientAccess()
+  const { user, loading: authLoading, logout } = useAuth();
+  const router = useRouter();
+  const [hospitalData, setHospitalData] = useState(null);
+  const [staff, setStaff] = useState([]);
+  const [authorizedPatients, setAuthorizedPatients] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
-    if (organization) {
-      fetchStaffList()
-      fetchAuthorizedPatients()
+    if (!authLoading && !user) {
+      router.push('/login');
+      return;
     }
-  }, [organization])
 
-  if (loading) {
-    return <div className="flex items-center justify-center min-h-screen">
-      <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-indigo-500"></div>
-    </div>
+    const fetchData = async () => {
+      if (!user || !user.customClaims?.role) {
+        setError('Unauthorized access');
+        setLoading(false);
+        return;
+      }
+
+      try {
+        // Fetch hospital data
+        const hospitalRef = doc(db, 'hospitals', user.uid);
+        const hospitalSnap = await getDoc(hospitalRef);
+        if (hospitalSnap.exists()) {
+          setHospitalData(hospitalSnap.data());
+        } else if (user.customClaims.role === 'hospital_admin') {
+          router.push('/hospital-admin'); // Redirect to setup hospital if not exists
+          return;
+        } else {
+          setError('No hospital found');
+        }
+
+        // Fetch staff (users with hospitalId matching user's hospital)
+        const staffQuery = query(
+          collection(db, 'users'),
+          where('hospitalId', '==', user.uid),
+          where('role', 'in', ['doctor', 'nurse', 'receptionist'])
+        );
+        const staffSnapshot = await getDocs(staffQuery);
+        const staffList = staffSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setStaff(staffList);
+
+        // Fetch authorized patients (consents for this hospital)
+        const consentsQuery = query(
+          collection(db, 'consents'),
+          where('hospitalId', '==', user.uid)
+        );
+        const consentsSnapshot = await getDocs(consentsQuery);
+        const patientList = consentsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setAuthorizedPatients(patientList);
+
+        setLoading(false);
+      } catch (err) {
+        setError(err.message);
+        setLoading(false);
+      }
+    };
+
+    if (user && user.customClaims?.role === 'hospital_admin') {
+      fetchData();
+    }
+  }, [user, authLoading, router]);
+
+  if (authLoading || loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="animate-spin rounded-full h-32 w-32 border-b-2 border-indigo-500"></div>
+      </div>
+    );
   }
 
-  if (!organization) {
-    return <div className="text-center py-12">
-      <p>No organization found. Please complete onboarding.</p>
-      <Link href="/onboarding" className="text-indigo-600 hover:text-indigo-800">
-        Go to Onboarding
-      </Link>
-    </div>
+  if (error || !hospitalData) {
+    return (
+      <div className="text-center py-12">
+        <p>{error || 'No hospital found. Please complete hospital setup.'}</p>
+        <Link href="/hospital-admin" className="text-indigo-600 hover:text-indigo-800">
+          Go to Hospital Setup
+        </Link>
+      </div>
+    );
   }
 
   return (
@@ -43,20 +99,25 @@ export default function DashboardPage() {
           <div className="flex justify-between items-center py-6">
             <div>
               <h1 className="text-3xl font-bold text-gray-900">
-                {hospitalData?.name || organization.name}
+                {hospitalData.name}
               </h1>
               <p className="text-gray-600">
-                Welcome back, {user?.firstName} ({membership?.role})
+                Welcome back, {user.email} ({user.customClaims.role})
               </p>
             </div>
             <div className="flex items-center space-x-4">
-              <Link 
-                href="/hospital-admin" 
+              <Link
+                href="/hospital-admin"
                 className="bg-indigo-600 text-white px-4 py-2 rounded-md hover:bg-indigo-700"
               >
-                {membership?.role === 'admin' ? 'Admin Panel' : 'Staff Panel'}
+                {user.customClaims.role === 'hospital_admin' ? 'Admin Panel' : 'Staff Panel'}
               </Link>
-              <UserButton />
+              <button
+                onClick={logout}
+                className="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700"
+              >
+                Sign Out
+              </button>
             </div>
           </div>
         </div>
@@ -80,13 +141,13 @@ export default function DashboardPage() {
           />
           <StatCard
             title="Pending Requests"
-            value="0" // You'd fetch this
+            value="0" // Placeholder, fetch from consents if needed
             icon="⏳"
             color="bg-yellow-500"
           />
           <StatCard
             title="Specialties"
-            value={hospitalData?.specialties?.length || 0}
+            value={hospitalData.specialties?.length || 0}
             icon="🔬"
             color="bg-purple-500"
           />
@@ -140,7 +201,7 @@ export default function DashboardPage() {
         </div>
       </main>
     </div>
-  )
+  );
 }
 
 function StatCard({ title, value, icon, color }) {
@@ -156,7 +217,7 @@ function StatCard({ title, value, icon, color }) {
         </div>
       </div>
     </div>
-  )
+  );
 }
 
 function QuickAction({ href, title, description, icon }) {
@@ -168,7 +229,7 @@ function QuickAction({ href, title, description, icon }) {
       </div>
       <p className="text-gray-600 text-sm">{description}</p>
     </Link>
-  )
+  );
 }
 
 function ActivityItem({ action, time, user }) {
@@ -180,5 +241,5 @@ function ActivityItem({ action, time, user }) {
       </div>
       <span className="text-gray-400 text-sm">{time}</span>
     </div>
-  )
+  );
 }

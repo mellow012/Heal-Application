@@ -1,534 +1,282 @@
-'use client'
-import React, { useState, useEffect, useCallback } from 'react';
-import { useUser } from '@clerk/nextjs';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { Separator } from '@/components/ui/separator';
-import { 
-  User, 
-  Clock, 
-  CheckCircle, 
-  XCircle, 
-  Copy, 
-  QrCode, 
-  AlertTriangle, 
-  Shield,
-  FileText,
-  Heart,
-  Settings,
-  Mail,
-  Phone,
-  Calendar,
-  MapPin,
-  ArrowUp
-} from 'lucide-react';
+'use client';
+
+import { useAuth } from '@/app/components/AuthProvide';
+import { db } from '@/lib/firebase';
+import { doc, getDoc, setDoc, collection, getDocs } from 'firebase/firestore';
+import { useRouter } from 'next/navigation';
+import { useState, useEffect } from 'react';
+import { Loader2, User, Phone, Building2, FileText } from 'lucide-react';
 
 export default function ProfilePage() {
-  const { user, isLoaded } = useUser();
-  const [medicalStatus, setMedicalStatus] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [requesting, setRequesting] = useState(false);
+  const { user, loading: authLoading } = useAuth();
+  const router = useRouter();
+  const [profile, setProfile] = useState(null);
+  const [isSetup, setIsSetup] = useState(false);
+  const [displayName, setDisplayName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [hospitalId, setHospitalId] = useState('');
+  const [licenseNumber, setLicenseNumber] = useState('');
+  const [hospitals, setHospitals] = useState([]);
   const [error, setError] = useState('');
-  const [copySuccess, setCopySuccess] = useState(false);
-  const [activeTab, setActiveTab] = useState('overview');
-
-  const checkMedicalStatus = useCallback(async () => {
-    if (!user?.id) return;
-    
-    try {
-      setError('');
-      const response = await fetch(`/api/medical-passport/status?userId=${encodeURIComponent(user.id)}`);
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      setMedicalStatus(data);
-    } catch (error) {
-      console.error('Error checking medical status:', error);
-      setError('Failed to load medical status');
-    } finally {
-      setLoading(false);
-    }
-  }, [user?.id]);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    if (isLoaded && user) {
-      checkMedicalStatus();
-    } else if (isLoaded && !user) {
-      setLoading(false);
-      setError('User not authenticated');
-    }
-  }, [user, isLoaded, checkMedicalStatus]);
+    if (authLoading || !user) return;
 
-  const requestMedicalPassport = async () => {
-    if (!user?.id) {
-      setError('User not authenticated');
+    const fetchProfile = async () => {
+      try {
+        const userRef = doc(db, 'users', user.uid);
+        const userSnap = await getDoc(userRef);
+        if (userSnap.exists()) {
+          const data = userSnap.data();
+          setProfile(data);
+          setDisplayName(data.displayName || user.displayName || '');
+          setPhone(data.phone || '');
+          setHospitalId(data.hospitalId || '');
+          setLicenseNumber(data.licenseNumber || '');
+          setIsSetup(!!data.displayName); // Profile is complete if displayName exists
+        } else {
+          setIsSetup(false);
+        }
+
+        // Fetch hospitals for hospital_admin and doctor roles
+        if (['hospital_admin', 'doctor'].includes(user.customClaims?.role)) {
+          const hospitalsRef = collection(db, 'healthcare_providers');
+          const hospitalsSnap = await getDocs(hospitalsRef);
+          const hospitalsData = hospitalsSnap.docs.map(doc => ({
+            id: doc.id,
+            name: doc.data().name,
+          }));
+          setHospitals(hospitalsData);
+        }
+      } catch (err) {
+        console.error('ProfilePage: Error fetching profile:', err.message);
+        setError('Failed to load profile');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchProfile();
+  }, [user, authLoading]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (!displayName.trim()) {
+      setError('Full name is required');
+      return;
+    }
+    if (['hospital_admin', 'doctor'].includes(user.customClaims?.role) && !hospitalId) {
+      setError('Please select a hospital');
+      return;
+    }
+    if (user.customClaims?.role === 'doctor' && !licenseNumber.trim()) {
+      setError('License number is required for doctors');
       return;
     }
 
-    setRequesting(true);
-    setError('');
-    
     try {
-      const response = await fetch('/api/medical-passport/request', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ userId: user.id }),
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+      setLoading(true);
+      const userRef = doc(db, 'users', user.uid);
+      const profileData = {
+        displayName: displayName.trim(),
+        phone: phone.trim() || '',
+        role: user.customClaims?.role || 'patient',
+        email: user.email,
+        updatedAt: new Date().toISOString(),
+      };
+      if (['hospital_admin', 'doctor'].includes(user.customClaims?.role)) {
+        profileData.hospitalId = hospitalId;
       }
-
-      const data = await response.json();
-      
-      if (data.success) {
-        await checkMedicalStatus(); // Refresh status
-      } else {
-        setError(data.error || 'Failed to request medical passport');
+      if (user.customClaims?.role === 'doctor') {
+        profileData.licenseNumber = licenseNumber.trim();
       }
-    } catch (error) {
-      console.error('Request error:', error);
-      setError('Failed to request medical passport. Please try again.');
+      await setDoc(userRef, profileData, { merge: true });
+      setIsSetup(true);
+      setProfile(profileData);
+    } catch (err) {
+      console.error('ProfilePage: Error saving profile:', err.message);
+      setError('Failed to save profile');
     } finally {
-      setRequesting(false);
+      setLoading(false);
     }
   };
 
-  const copyCode = async (code) => {
-    if (!code) return;
-    
-    try {
-      await navigator.clipboard.writeText(code);
-      setCopySuccess(true);
-      setTimeout(() => setCopySuccess(false), 2000);
-    } catch (error) {
-      console.error('Failed to copy:', error);
-      setError('Failed to copy code to clipboard');
-    }
-  };
-
-  if (!isLoaded || loading) {
+  if (authLoading || loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="flex items-center gap-3">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-          <span className="text-lg">Loading your profile...</span>
-        </div>
+      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
+        <Loader2 className="h-12 w-12 animate-spin text-blue-600" />
       </div>
     );
   }
 
   if (!user) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <Card className="w-full max-w-md">
-          <CardContent className="pt-6">
-            <Alert variant="destructive">
-              <AlertTriangle className="h-4 w-4" />
-              <AlertDescription>
-                Please log in to access your profile.
-              </AlertDescription>
-            </Alert>
-          </CardContent>
-        </Card>
-      </div>
-    );
+    router.push('/sign-in');
+    return null;
   }
 
-  const isMedicalUser = medicalStatus?.userType === 'medical_user';
-  const hasPendingRequest = medicalStatus?.hasActiveRequest;
-
   return (
-    <div className="min-h-screen bg-gray-50">
-      {/* Header */}
-      <div className="bg-white shadow-sm border-b">
-        <div className="max-w-6xl mx-auto px-6 py-6">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
-              <div className="h-16 w-16 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center">
-                <User className="h-8 w-8 text-white" />
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
+      <div className="container mx-auto px-4 py-8 max-w-3xl">
+        <h1 className="text-3xl font-bold text-slate-800 mb-6">
+          {isSetup ? 'Your Profile' : 'Complete Your Profile'}
+        </h1>
+
+        {error && (
+          <div className="mb-6 p-4 bg-red-50 text-red-700 rounded-lg">
+            {error}
+          </div>
+        )}
+
+        {!isSetup ? (
+          <div className="bg-white rounded-2xl p-8 shadow-lg">
+            <div className="flex items-center gap-4 mb-6">
+              <div className="p-3 bg-blue-100 rounded-xl">
+                <User className="h-8 w-8 text-blue-600" />
+              </div>
+              <h2 className="text-xl font-semibold text-slate-800">Profile Setup</h2>
+            </div>
+            <form onSubmit={handleSubmit} className="space-y-6">
+              <div>
+                <label htmlFor="displayName" className="block text-sm font-medium text-slate-700">
+                  Full Name
+                </label>
+                <input
+                  id="displayName"
+                  type="text"
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Enter your full name"
+                  required
+                />
               </div>
               <div>
-                <h1 className="text-2xl font-bold text-gray-900">
-                  {user.firstName} {user.lastName}
-                </h1>
-                <p className="text-gray-600">{user.primaryEmailAddress?.emailAddress}</p>
+                <label htmlFor="phone" className="block text-sm font-medium text-slate-700">
+                  Phone Number (Optional)
+                </label>
+                <input
+                  id="phone"
+                  type="tel"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Enter your phone number"
+                />
               </div>
-            </div>
-            
-            <div className="flex items-center gap-3">
-              <Badge 
-                variant={isMedicalUser ? "default" : "secondary"}
-                className="flex items-center gap-1 px-3 py-1"
-              >
-                {isMedicalUser ? (
-                  <><Shield className="h-3 w-3" /> Medical User</>
-                ) : (
-                  <><User className="h-3 w-3" /> Basic User</>
-                )}
-              </Badge>
-              
-              {hasPendingRequest && (
-                <Badge variant="outline" className="flex items-center gap-1">
-                  <Clock className="h-3 w-3" />
-                  Pending Approval
-                </Badge>
+              {['hospital_admin', 'doctor'].includes(user.customClaims?.role) && (
+                <div>
+                  <label htmlFor="hospitalId" className="block text-sm font-medium text-slate-700">
+                    Hospital Affiliation
+                  </label>
+                  <select
+                    id="hospitalId"
+                    value={hospitalId}
+                    onChange={(e) => setHospitalId(e.target.value)}
+                    className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    required
+                  >
+                    <option value="">Select a hospital</option>
+                    {hospitals.map(hospital => (
+                      <option key={hospital.id} value={hospital.id}>
+                        {hospital.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
               )}
+              {user.customClaims?.role === 'doctor' && (
+                <div>
+                  <label htmlFor="licenseNumber" className="block text-sm font-medium text-slate-700">
+                    Medical License Number
+                  </label>
+                  <input
+                    id="licenseNumber"
+                    type="text"
+                    value={licenseNumber}
+                    onChange={(e) => setLicenseNumber(e.target.value)}
+                    className="mt-1 w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="Enter your license number"
+                    required
+                  />
+                </div>
+              )}
+              <button
+                type="submit"
+                disabled={loading}
+                className={`w-full py-2 px-4 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors ${
+                  loading ? 'opacity-50 cursor-not-allowed' : ''
+                }`}
+              >
+                {loading ? (
+                  <Loader2 className="h-5 w-5 animate-spin mx-auto" />
+                ) : (
+                  'Save Profile'
+                )}
+              </button>
+            </form>
+          </div>
+        ) : (
+          <div className="bg-white rounded-2xl p-8 shadow-lg">
+            <div className="flex items-center gap-4 mb-6">
+              <div className="p-3 bg-blue-100 rounded-xl">
+                <User className="h-8 w-8 text-blue-600" />
+              </div>
+              <h2 className="text-xl font-semibold text-slate-800">Profile Details</h2>
+            </div>
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <User className="h-5 w-5 text-slate-600" />
+                <p className="text-sm text-slate-800">
+                  <span className="font-medium">Name:</span> {profile.displayName}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <User className="h-5 w-5 text-slate-600" />
+                <p className="text-sm text-slate-800">
+                  <span className="font-medium">Email:</span> {profile.email}
+                </p>
+              </div>
+              {profile.phone && (
+                <div className="flex items-center gap-2">
+                  <Phone className="h-5 w-5 text-slate-600" />
+                  <p className="text-sm text-slate-800">
+                    <span className="font-medium">Phone:</span> {profile.phone}
+                  </p>
+                </div>
+              )}
+              <div className="flex items-center gap-2">
+                <User className="h-5 w-5 text-slate-600" />
+                <p className="text-sm text-slate-800">
+                  <span className="font-medium">Role:</span> {profile.role.charAt(0).toUpperCase() + profile.role.slice(1)}
+                </p>
+              </div>
+              {profile.hospitalId && (
+                <div className="flex items-center gap-2">
+                  <Building2 className="h-5 w-5 text-slate-600" />
+                  <p className="text-sm text-slate-800">
+                    <span className="font-medium">Hospital:</span> {hospitals.find(h => h.id === profile.hospitalId)?.name || 'Unknown'}
+                  </p>
+                </div>
+              )}
+              {profile.licenseNumber && (
+                <div className="flex items-center gap-2">
+                  <FileText className="h-5 w-5 text-slate-600" />
+                  <p className="text-sm text-slate-800">
+                    <span className="font-medium">License Number:</span> {profile.licenseNumber}
+                  </p>
+                </div>
+              )}
+              <button
+                onClick={() => setIsSetup(false)}
+                className="mt-4 px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition-colors"
+              >
+                Edit Profile
+              </button>
             </div>
           </div>
-        </div>
-      </div>
-
-      <div className="max-w-6xl mx-auto px-6 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          {/* Sidebar Navigation */}
-          <div className="lg:col-span-1">
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-lg">Profile Menu</CardTitle>
-              </CardHeader>
-              <CardContent className="p-0">
-                <nav className="space-y-1">
-                  {[
-                    { id: 'overview', label: 'Overview', icon: User },
-                    { id: 'medical', label: 'Medical Access', icon: Heart },
-                    { id: 'settings', label: 'Settings', icon: Settings },
-                  ].map((item) => {
-                    const Icon = item.icon;
-                    return (
-                      <button
-                        key={item.id}
-                        onClick={() => setActiveTab(item.id)}
-                        className={`w-full flex items-center gap-3 px-4 py-3 text-left transition-colors ${
-                          activeTab === item.id
-                            ? 'bg-blue-50 text-blue-700 border-r-2 border-blue-700'
-                            : 'hover:bg-gray-50 text-gray-700'
-                        }`}
-                      >
-                        <Icon className="h-4 w-4" />
-                        {item.label}
-                      </button>
-                    );
-                  })}
-                </nav>
-              </CardContent>
-            </Card>
-          </div>
-
-          {/* Main Content */}
-          <div className="lg:col-span-2 space-y-6">
-            {error && (
-              <Alert variant="destructive">
-                <XCircle className="h-4 w-4" />
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
-
-            {/* Overview Tab */}
-            {activeTab === 'overview' && (
-              <div className="space-y-6">
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Personal Information</CardTitle>
-                    <CardDescription>Your basic profile information</CardDescription>
-                  </CardHeader>
-                  <CardContent className="space-y-4">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div>
-                        <label className="text-sm font-medium text-gray-600">Full Name</label>
-                        <p className="text-lg">{user.firstName} {user.lastName}</p>
-                      </div>
-                      <div>
-                        <label className="text-sm font-medium text-gray-600">Email</label>
-                        <div className="flex items-center gap-2">
-                          <Mail className="h-4 w-4 text-gray-400" />
-                          <p>{user.primaryEmailAddress?.emailAddress}</p>
-                        </div>
-                      </div>
-                    </div>
-                    
-                    <div className="pt-4 border-t">
-                      <p className="text-sm text-gray-600 mb-2">Account Created</p>
-                      <div className="flex items-center gap-2">
-                        <Calendar className="h-4 w-4 text-gray-400" />
-                        <p>{new Date(user.createdAt).toLocaleDateString()}</p>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-
-                {/* Account Status */}
-                <Card>
-                  <CardHeader>
-                    <CardTitle>Account Status</CardTitle>
-                  </CardHeader>
-                  <CardContent>
-                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                      <div className="flex items-center gap-3">
-                        {isMedicalUser ? (
-                          <>
-                            <div className="h-10 w-10 bg-green-100 rounded-full flex items-center justify-center">
-                              <Shield className="h-5 w-5 text-green-600" />
-                            </div>
-                            <div>
-                              <p className="font-medium text-green-700">Medical User</p>
-                              <p className="text-sm text-green-600">Full access to medical features</p>
-                            </div>
-                          </>
-                        ) : (
-                          <>
-                            <div className="h-10 w-10 bg-gray-100 rounded-full flex items-center justify-center">
-                              <User className="h-5 w-5 text-gray-600" />
-                            </div>
-                            <div>
-                              <p className="font-medium">Basic User</p>
-                              <p className="text-sm text-gray-600">Limited access to features</p>
-                            </div>
-                          </>
-                        )}
-                      </div>
-                      
-                      {!isMedicalUser && (
-                        <Button 
-                          onClick={() => setActiveTab('medical')}
-                          variant="outline"
-                          size="sm"
-                        >
-                          <ArrowUp className="h-4 w-4 mr-2" />
-                          Upgrade
-                        </Button>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-            )}
-
-            {/* Medical Access Tab */}
-            {activeTab === 'medical' && (
-              <div className="space-y-6">
-                {isMedicalUser ? (
-                  <Card>
-                    <CardHeader>
-                      <div className="flex items-center gap-2">
-                        <CheckCircle className="h-6 w-6 text-green-500" />
-                        <div>
-                          <CardTitle>Medical Passport Active</CardTitle>
-                          <CardDescription>You have full access to medical features</CardDescription>
-                        </div>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        <div className="p-4 bg-green-50 rounded-lg">
-                          <div className="flex items-center gap-2 mb-2">
-                            <FileText className="h-5 w-5 text-green-600" />
-                            <p className="font-medium text-green-700">Medical Records</p>
-                          </div>
-                          <p className="text-sm text-green-600">Access your complete medical history</p>
-                        </div>
-                        
-                        <div className="p-4 bg-blue-50 rounded-lg">
-                          <div className="flex items-center gap-2 mb-2">
-                            <Heart className="h-5 w-5 text-blue-600" />
-                            <p className="font-medium text-blue-700">Health Monitoring</p>
-                          </div>
-                          <p className="text-sm text-blue-600">Track your health metrics and vitals</p>
-                        </div>
-                      </div>
-                      
-                      <Button 
-                        onClick={() => window.location.href = '/dashboard/medical'}
-                        className="w-full"
-                      >
-                        Access Medical Dashboard
-                      </Button>
-                    </CardContent>
-                  </Card>
-                ) : hasPendingRequest ? (
-                  <Card>
-                    <CardHeader>
-                      <div className="flex items-center gap-2">
-                        <Clock className="h-6 w-6 text-yellow-500" />
-                        <div>
-                          <CardTitle>Medical Passport Pending</CardTitle>
-                          <CardDescription>Your request is awaiting hospital verification</CardDescription>
-                        </div>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="space-y-4">
-                      {medicalStatus?.request?.verification_code && (
-                        <div className="bg-yellow-50 p-4 rounded-lg">
-                          <div className="flex items-center justify-between mb-3">
-                            <p className="font-medium text-yellow-800">Your Verification Code:</p>
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              onClick={() => copyCode(medicalStatus.request.verification_code)}
-                            >
-                              <Copy className="h-4 w-4 mr-1" />
-                              {copySuccess ? 'Copied!' : 'Copy'}
-                            </Button>
-                          </div>
-                          
-                          <div className="text-center mb-4">
-                            <code className="text-3xl font-mono bg-white px-4 py-2 rounded border-2 border-yellow-200">
-                              {medicalStatus.request.verification_code}
-                            </code>
-                          </div>
-                          
-                          <div className="space-y-2 text-sm text-yellow-700">
-                            <p className="font-medium">Next Steps:</p>
-                            <ol className="list-decimal list-inside space-y-1 ml-4">
-                              <li>Visit any participating hospital</li>
-                              <li>Show this verification code to hospital staff</li>
-                              <li>Provide valid ID for identity verification</li>
-                              <li>Staff will activate your medical passport</li>
-                            </ol>
-                          </div>
-                          
-                          {medicalStatus.request.expires_at && (
-                            <div className="mt-3 pt-3 border-t border-yellow-200">
-                              <p className="text-xs text-yellow-600">
-                                Code expires: {new Date(medicalStatus.request.expires_at).toLocaleString()}
-                              </p>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      
-                      <Button 
-                        variant="outline" 
-                        onClick={checkMedicalStatus}
-                        className="w-full"
-                      >
-                        Refresh Status
-                      </Button>
-                    </CardContent>
-                  </Card>
-                ) : (
-                  <Card>
-                    <CardHeader>
-                      <div className="flex items-center gap-2">
-                        <QrCode className="h-6 w-6 text-blue-500" />
-                        <div>
-                          <CardTitle>Upgrade to Medical User</CardTitle>
-                          <CardDescription>Get access to your medical records and health data</CardDescription>
-                        </div>
-                      </div>
-                    </CardHeader>
-                    <CardContent className="space-y-6">
-                      <div className="bg-blue-50 p-6 rounded-lg">
-                        <h3 className="font-semibold mb-3 text-blue-900">What You'll Get:</h3>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          <div className="flex items-start gap-3">
-                            <CheckCircle className="h-5 w-5 text-blue-600 mt-0.5" />
-                            <div>
-                              <p className="font-medium text-blue-900">Medical Records Access</p>
-                              <p className="text-sm text-blue-700">View your complete medical history</p>
-                            </div>
-                          </div>
-                          <div className="flex items-start gap-3">
-                            <CheckCircle className="h-5 w-5 text-blue-600 mt-0.5" />
-                            <div>
-                              <p className="font-medium text-blue-900">Hospital Integration</p>
-                              <p className="text-sm text-blue-700">Seamless data sharing with healthcare providers</p>
-                            </div>
-                          </div>
-                          <div className="flex items-start gap-3">
-                            <CheckCircle className="h-5 w-5 text-blue-600 mt-0.5" />
-                            <div>
-                              <p className="font-medium text-blue-900">Health Monitoring</p>
-                              <p className="text-sm text-blue-700">Track vitals and health metrics</p>
-                            </div>
-                          </div>
-                          <div className="flex items-start gap-3">
-                            <CheckCircle className="h-5 w-5 text-blue-600 mt-0.5" />
-                            <div>
-                              <p className="font-medium text-blue-900">Emergency Access</p>
-                              <p className="text-sm text-blue-700">Quick access to critical health information</p>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                      
-                      <div className="bg-gray-50 p-4 rounded-lg">
-                        <p className="font-medium mb-2 text-gray-900">How the Verification Process Works:</p>
-                        <ol className="list-decimal list-inside space-y-1 text-sm text-gray-700">
-                          <li>Click "Request Medical Passport" below</li>
-                          <li>Receive a unique 6-digit verification code</li>
-                          <li>Visit any participating hospital with valid ID</li>
-                          <li>Hospital staff will verify your identity and activate your account</li>
-                          <li>Start accessing your medical features immediately</li>
-                        </ol>
-                      </div>
-                      
-                      <Button 
-                        onClick={requestMedicalPassport}
-                        disabled={requesting}
-                        className="w-full bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700"
-                        size="lg"
-                      >
-                        {requesting ? (
-                          <>
-                            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                            Processing Request...
-                          </>
-                        ) : (
-                          <>
-                            <QrCode className="h-5 w-5 mr-2" />
-                            Request Medical Passport
-                          </>
-                        )}
-                      </Button>
-                    </CardContent>
-                  </Card>
-                )}
-              </div>
-            )}
-
-            {/* Settings Tab */}
-            {activeTab === 'settings' && (
-              <Card>
-                <CardHeader>
-                  <CardTitle>Account Settings</CardTitle>
-                  <CardDescription>Manage your account preferences</CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                      <div>
-                        <p className="font-medium">Account Management</p>
-                        <p className="text-sm text-gray-600">Update your profile information</p>
-                      </div>
-                      <Button variant="outline" size="sm">
-                        Edit Profile
-                      </Button>
-                    </div>
-                    
-                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                      <div>
-                        <p className="font-medium">Security Settings</p>
-                        <p className="text-sm text-gray-600">Manage passwords and security options</p>
-                      </div>
-                      <Button variant="outline" size="sm">
-                        Security
-                      </Button>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            )}
-          </div>
-        </div>
+        )}
       </div>
     </div>
   );

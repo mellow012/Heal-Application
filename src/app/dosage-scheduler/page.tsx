@@ -1,51 +1,134 @@
 'use client';
-import { useAuth } from '@clerk/nextjs';
+
+import { useAuth } from '@/app/components/AuthProvide';
 import { db } from '@/lib/firebase';
-import { collection, query, where, onSnapshot, setDoc, doc, deleteDoc } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, setDoc, doc } from 'firebase/firestore';
 import { useEffect, useState } from 'react';
-import { Loader2, Pill, Clock, Trash2, FileText } from 'lucide-react';
 import Link from 'next/link';
+import { Pill, Clock, Trash2, FileText } from 'lucide-react';
+
+const SkeletonLoader = () => (
+  <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
+    <div className="container mx-auto px-4 py-8 max-w-7xl">
+      {/* Back link skeleton */}
+      <div className="mb-4">
+        <div className="h-4 w-32 bg-slate-200 rounded animate-pulse" />
+      </div>
+      {/* Header skeleton */}
+      <div className="flex items-center gap-4 mb-6">
+        <div className="p-3 bg-blue-100 rounded-xl">
+          <div className="h-8 w-8 bg-slate-200 rounded animate-pulse" />
+        </div>
+        <div className="h-8 w-64 bg-slate-200 rounded animate-pulse" />
+      </div>
+      {/* Prescriptions section skeleton */}
+      <div className="bg-white rounded-2xl p-6 shadow-lg mb-6">
+        <div className="h-6 w-48 bg-slate-200 rounded mb-4 animate-pulse" />
+        <div className="space-y-4">
+          {[...Array(2)].map((_, index) => (
+            <div key={index} className="p-4 bg-blue-50 rounded-lg flex justify-between items-center">
+              <div className="space-y-2">
+                <div className="h-4 w-40 bg-slate-200 rounded animate-pulse" />
+                <div className="h-3 w-32 bg-slate-200 rounded animate-pulse" />
+                <div className="h-3 w-28 bg-slate-200 rounded animate-pulse" />
+              </div>
+              <div className="h-10 w-24 bg-slate-200 rounded-lg animate-pulse" />
+            </div>
+          ))}
+        </div>
+      </div>
+      {/* Schedule section skeleton */}
+      <div className="bg-white rounded-2xl p-6 shadow-lg">
+        <div className="flex justify-between items-center mb-4">
+          <div className="h-6 w-48 bg-slate-200 rounded animate-pulse" />
+          <div className="h-5 w-32 bg-slate-200 rounded animate-pulse" />
+        </div>
+        <div className="space-y-4">
+          {[...Array(2)].map((_, index) => (
+            <div key={index} className="p-4 bg-blue-50 rounded-lg flex justify-between items-center">
+              <div className="space-y-2">
+                <div className="h-4 w-40 bg-slate-200 rounded animate-pulse" />
+                <div className="h-3 w-32 bg-slate-200 rounded animate-pulse" />
+                <div className="h-3 w-28 bg-slate-200 rounded animate-pulse" />
+              </div>
+              <div className="flex gap-2">
+                <div className="h-5 w-5 bg-slate-200 rounded animate-pulse" />
+                <div className="h-5 w-5 bg-slate-200 rounded animate-pulse" />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  </div>
+);
+
+const ErrorState = ({ error }) => (
+  <div className="min-h-screen bg-gradient-to-br from-red-50 to-pink-50 flex items-center justify-center">
+    <div className="bg-white rounded-2xl p-8 shadow-lg text-center">
+      <h1 className="text-2xl font-bold text-slate-800 mb-4">Something went wrong</h1>
+      <p className="text-slate-600 mb-6">Failed to load dosage scheduler: {error}</p>
+      <Link href="/sign-in" className="bg-blue-600 text-white px-6 py-3 rounded-lg hover:bg-blue-700">
+        Sign In Again
+      </Link>
+    </div>
+  </div>
+);
 
 export default function DosageScheduler() {
-  const { userId, isLoaded } = useAuth();
+  const { user, loading: authLoading } = useAuth();
   const [schedules, setSchedules] = useState([]);
   const [prescriptions, setPrescriptions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [remindersEnabled, setRemindersEnabled] = useState(false);
   const [importing, setImporting] = useState(false);
 
   useEffect(() => {
-    if (!isLoaded || !userId) return;
+    if (authLoading || !user) return;
 
+    const userId = user.uid;
+
+    // Fetch dosage schedules
     const scheduleQuery = query(collection(db, 'dosage-schedules'), where('userId', '==', userId));
-    const scheduleUnsubscribe = onSnapshot(scheduleQuery, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setSchedules(data);
-      setRemindersEnabled(data[0]?.remindersEnabled || false);
-    }, (error) => {
-      console.error('DosageScheduler: Error fetching schedules:', error.message);
-      alert(`Failed to load schedules: ${error.message}`);
-    });
+    const scheduleUnsubscribe = onSnapshot(
+      scheduleQuery,
+      (snapshot) => {
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setSchedules(data);
+        setRemindersEnabled(data[0]?.remindersEnabled || false);
+      },
+      (error) => {
+        console.error('DosageScheduler: Error fetching schedules:', error.message);
+        setError(error.message);
+        setLoading(false);
+      }
+    );
 
+    // Fetch active prescriptions
     const prescriptionQuery = query(
       collection(db, `e-passports/${userId}/prescriptions`),
       where('status', '==', 'active')
     );
-    const prescriptionUnsubscribe = onSnapshot(prescriptionQuery, (snapshot) => {
-      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-      setPrescriptions(data);
-      setLoading(false);
-    }, (error) => {
-      console.error('DosageScheduler: Error fetching prescriptions:', error.message);
-      alert(`Failed to load prescriptions: ${error.message}`);
-      setLoading(false);
-    });
+    const prescriptionUnsubscribe = onSnapshot(
+      prescriptionQuery,
+      (snapshot) => {
+        const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+        setPrescriptions(data);
+        setLoading(false);
+      },
+      (error) => {
+        console.error('DosageScheduler: Error fetching prescriptions:', error.message);
+        setError(error.message);
+        setLoading(false);
+      }
+    );
 
     return () => {
       scheduleUnsubscribe();
       prescriptionUnsubscribe();
     };
-  }, [userId, isLoaded]);
+  }, [user, authLoading]);
 
   useEffect(() => {
     if (!remindersEnabled || !schedules[0]?.medications) return;
@@ -101,17 +184,22 @@ export default function DosageScheduler() {
   const handleImportPrescription = async (prescription) => {
     setImporting(true);
     try {
+      const userId = user.uid;
       const newMed = generateSchedule(prescription);
       const existingSchedule = schedules[0] || { medications: [] };
-      await setDoc(doc(db, 'dosage-schedules', userId), {
-        userId,
-        medications: [...existingSchedule.medications, newMed],
-        remindersEnabled,
-        updatedAt: new Date()
-      }, { merge: true });
+      await setDoc(
+        doc(db, 'dosage-schedules', userId),
+        {
+          userId,
+          medications: [...existingSchedule.medications, newMed],
+          remindersEnabled,
+          updatedAt: new Date()
+        },
+        { merge: true }
+      );
     } catch (error) {
       console.error('DosageScheduler: Error importing prescription:', error.message);
-      alert('Failed to import prescription');
+      setError('Failed to import prescription');
     } finally {
       setImporting(false);
     }
@@ -119,42 +207,48 @@ export default function DosageScheduler() {
 
   const handleDeleteMed = async (index) => {
     try {
+      const userId = user.uid;
       const existingSchedule = schedules[0];
       if (!existingSchedule) return;
       const updatedMeds = existingSchedule.medications.filter((_, i) => i !== index);
-      await setDoc(doc(db, 'dosage-schedules', userId), {
-        userId,
-        medications: updatedMeds,
-        remindersEnabled,
-        updatedAt: new Date()
-      }, { merge: true });
+      await setDoc(
+        doc(db, 'dosage-schedules', userId),
+        {
+          userId,
+          medications: updatedMeds,
+          remindersEnabled,
+          updatedAt: new Date()
+        },
+        { merge: true }
+      );
     } catch (error) {
-      console.error('DosageScheduler: Error deleting med:', error.message);
-      alert('Failed to delete medication');
+      console.error('DosageScheduler: Error deleting medication:', error.message);
+      setError('Failed to delete medication');
     }
   };
 
   const handleToggleReminders = async () => {
     try {
-      await setDoc(doc(db, 'dosage-schedules', userId), {
-        userId,
-        medications: schedules[0]?.medications || [],
-        remindersEnabled: !remindersEnabled,
-        updatedAt: new Date()
-      }, { merge: true });
+      const userId = user.uid;
+      await setDoc(
+        doc(db, 'dosage-schedules', userId),
+        {
+          userId,
+          medications: schedules[0]?.medications || [],
+          remindersEnabled: !remindersEnabled,
+          updatedAt: new Date()
+        },
+        { merge: true }
+      );
     } catch (error) {
       console.error('DosageScheduler: Error toggling reminders:', error.message);
-      alert('Failed to toggle reminders');
+      setError('Failed to toggle reminders');
     }
   };
 
-  if (!isLoaded || loading) return (
-    <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-slate-50 to-blue-50">
-      <Loader2 className="h-12 w-12 animate-spin text-blue-600" />
-    </div>
-  );
-
-  if (!userId) return (
+  if (authLoading || loading) return <SkeletonLoader />;
+  if (error) return <ErrorState error={error} />;
+  if (!user) return (
     <div className="min-h-screen bg-gradient-to-br from-red-50 to-pink-50 flex items-center justify-center">
       <div className="bg-white rounded-2xl p-8 shadow-lg text-center">
         <h1 className="text-2xl font-bold text-slate-800 mb-4">Please Sign In</h1>
@@ -196,7 +290,11 @@ export default function DosageScheduler() {
                     className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2"
                     disabled={importing}
                   >
-                    {importing ? <Loader2 className="h-5 w-5 animate-spin" /> : <FileText className="h-5 w-5" />}
+                    {importing ? (
+                      <div className="h-5 w-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <FileText className="h-5 w-5" />
+                    )}
                     Import
                   </button>
                 </li>
@@ -214,12 +312,12 @@ export default function DosageScheduler() {
                 type="checkbox"
                 checked={remindersEnabled}
                 onChange={handleToggleReminders}
-                className="h-5 w-5 text-blue-600"
+                className="h-5 w-5 text-blue-600 rounded focus:ring-blue-600"
               />
               <span className="text-slate-600">Enable Reminders</span>
             </label>
           </div>
-          {schedules.length > 0 && schedules[0].medications?.length > 0 ? (
+          {schedules.length > 0 && schedules[0]?.medications?.length > 0 ? (
             <ul className="space-y-4">
               {schedules[0].medications.map((med, index) => (
                 <li key={index} className="p-4 bg-blue-50 rounded-lg flex justify-between items-center">
@@ -228,11 +326,11 @@ export default function DosageScheduler() {
                     <p className="text-sm text-slate-600">Times: {med.times.join(', ')}</p>
                     <p className="text-sm text-slate-600">Frequency: {med.days}</p>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 items-center">
                     <Clock className="h-5 w-5 text-blue-600" />
                     <button
                       onClick={() => handleDeleteMed(index)}
-                      className="p-2 hover:bg-red-100 rounded-full"
+                      className="p-2 hover:bg-red-100 rounded-full transition-colors"
                       title="Delete"
                     >
                       <Trash2 className="h-5 w-5 text-red-600" />

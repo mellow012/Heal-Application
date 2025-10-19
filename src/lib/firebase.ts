@@ -10,7 +10,7 @@ const firebaseConfig = {
   storageBucket: "heal-e-healthapp.firebasestorage.app",
   messagingSenderId: "788471354165",
   appId: "1:788471354165:web:4a686d002c89ad6cb2f27c",
-  measurementId: "G-171SBF2ZXB"
+  measurementId:"G-171SBF2ZXB"
  
 };
 
