@@ -62,6 +62,7 @@ yarn-error.log*
 .env*
 
 serviceKey.json
+heal-application-firebase-adminsdk-*.json
 # vercel
 .vercel
 
